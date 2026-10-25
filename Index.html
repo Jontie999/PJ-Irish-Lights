@@ -1,13 +1,267 @@
-export default {
-  async fetch(req) {
-    const url = new URL(req.url);
-    const r = await fetch("https://hub.dublinbaybuoy.com" + url.pathname + url.search);
-    return new Response(r.body, {
-      status: r.status,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
-      }
-    });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bay Weather</title>
+<style>
+  :root { --bg:#eaf3fb; --card:#ffffff; --text:#12263a; --muted:#5f7790; --line:#cfe0ef; --accent:#0a6ebd; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0b1722; --card:#14263a; --text:#e8f1f9; --muted:#90a9c0; --line:#24405a; --accent:#5cb2f2; }
   }
-};
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); padding:14px; max-width:760px; margin-inline:auto; }
+  h1 { font-size:1.35rem; margin:4px 2px 12px; }
+  .panel { background:var(--card); border:2px solid var(--accent); border-radius:18px; overflow:hidden; box-shadow:0 4px 18px rgba(10,110,189,.15); }
+  .panel-head { background:linear-gradient(135deg,#0a6ebd,#16a5c9); padding:14px; }
+  .panel-head select { width:100%; font-size:1.1rem; padding:12px; border-radius:12px; border:2px solid rgba(255,255,255,.7); background:#fff; color:#12263a; font-weight:600; }
+  .panel-body { padding:14px; }
+  .row { display:flex; gap:8px; margin:0 0 10px; }
+  button { flex:1; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:.95rem; cursor:pointer; }
+  button.on { background:linear-gradient(135deg,#0a6ebd,#16a5c9); color:#fff; border-color:transparent; }
+  .meta { color:var(--muted); font-size:.85rem; margin:0 2px 12px; }
+  .hero { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .card { border-radius:14px; padding:14px; color:#fff; position:relative; }
+  .card .k { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; opacity:.9; }
+  .card .v { font-size:2.3rem; font-weight:700; line-height:1.1; margin-top:4px; }
+  .card .u { font-size:1rem; font-weight:500; opacity:.9; }
+  .card .s { font-size:.85rem; opacity:.95; margin-top:4px; }
+  .compass-card { grid-column:1 / -1; background:linear-gradient(135deg,#5b3fd1,#8b5cf6); display:flex; align-items:center; gap:14px; }
+  .compass-card svg { width:130px; height:130px; flex:none; }
+  .compass-card .big { font-size:2.6rem; font-weight:700; line-height:1; }
+  .compass-card .deg { font-size:1.2rem; margin-top:4px; }
+  .compass-card .blow { font-size:.85rem; opacity:.9; margin-top:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; margin-top:10px; }
+  .tile { border-radius:14px; padding:12px; color:#fff; }
+  .tile .k { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; opacity:.9; }
+  .tile .v { font-size:1.5rem; font-weight:700; margin-top:4px; }
+  .tile .u { font-size:.85rem; font-weight:500; opacity:.9; }
+  .c-temp { background:linear-gradient(135deg,#f97316,#ef4444); }
+  .c-sea { background:linear-gradient(135deg,#0891b2,#0e7490); }
+  .c-press { background:linear-gradient(135deg,#a855f7,#7c3aed); }
+  .c-wave { background:linear-gradient(135deg,#14b8a6,#0d9488); }
+  .c-tide { background:linear-gradient(135deg,#2563eb,#1d4ed8); }
+  .c-hum { background:linear-gradient(135deg,#06b6d4,#3b82f6); }
+  .c-other { background:linear-gradient(135deg,#64748b,#475569); }
+  h2 { font-size:1rem; margin:18px 2px 8px; }
+  .wrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; }
+  th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { background:linear-gradient(135deg,#0a6ebd,#16a5c9); color:#fff; font-weight:600; text-transform:capitalize; }
+  tr:nth-child(even) td { background:rgba(10,110,189,.06); }
+  .err { background:var(--card); border:2px solid #c0392b; color:#c0392b; padding:12px; border-radius:12px; margin-top:12px; }
+</style>
+</head>
+<body>
+<h1>🌊 Bay Weather</h1>
+
+<div class="panel">
+  <div class="panel-head">
+    <select id="station" aria-label="Station"></select>
+  </div>
+  <div class="panel-body">
+    <div class="row">
+      <button id="refresh">↻ Refresh</button>
+      <button data-b="hourly" class="on">Hourly</button>
+      <button data-b="daily">Daily</button>
+    </div>
+    <div class="meta" id="meta">Loading…</div>
+    <div class="hero" id="hero"></div>
+    <div class="grid" id="latest"></div>
+  </div>
+</div>
+
+<h2 id="hist-title"></h2>
+<div class="wrap"><table id="hist"></table></div>
+<div id="error"></div>
+
+<script>
+const HUB = "https://silent-meadow-67e5.jontie999.workers.dev";
+const DEFAULT_MATCH = "briggs";
+let bucket = "hourly";
+
+const sel = document.getElementById("station");
+const errBox = document.getElementById("error");
+
+const UNITS = { wind_ms:"m/s", gust_ms:"m/s", wind_kn:"kn", gust_kn:"kn", temp_c:"°C", air_temp_c:"°C", sea_temp_c:"°C",
+  water_temp_c:"°C", pressure_hpa:"hPa", wave_height_m:"m", tide_m:"m", level_m:"m", humidity_pct:"%",
+  wind_dir_deg:"°", wave_period_s:"s" };
+const POINTS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+const BF = [1,4,7,11,17,22,28,34,41,48,56,64];
+
+const pretty = k => k.replace(/_(ms|c|m|hpa|pct|deg|kn|s)$/,"").replace(/_/g," ");
+const r1 = v => Math.round(v*10)/10;
+const fmt = v => typeof v === "number" ? (Math.round(v*100)/100).toString() : String(v);
+const fmtTime = ts => { try { return new Date(ts).toLocaleString([], {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}); } catch (e) { return ts; } };
+const compass = deg => POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
+
+function toKn(key, v) {
+  if (/kn|knot/i.test(key)) return v;
+  if (/mph/i.test(key)) return v * 0.868976;
+  if (/kmh|kph/i.test(key)) return v * 0.539957;
+  return v * 1.94384; // assume m/s
+}
+function windColour(kn) {
+  if (kn < 7)  return "linear-gradient(135deg,#16a34a,#22c55e)";
+  if (kn < 17) return "linear-gradient(135deg,#0891b2,#0ea5e9)";
+  if (kn < 22) return "linear-gradient(135deg,#f59e0b,#eab308)";
+  if (kn < 28) return "linear-gradient(135deg,#f97316,#ea580c)";
+  return "linear-gradient(135deg,#dc2626,#991b1b)";
+}
+function beaufort(kn) { let f = 0; while (f < BF.length && kn >= BF[f]) f++; return f; }
+function catClass(k) {
+  if (/sea|water/i.test(k) && /temp/i.test(k)) return "c-sea";
+  if (/temp/i.test(k)) return "c-temp";
+  if (/press/i.test(k)) return "c-press";
+  if (/wave|swell/i.test(k)) return "c-wave";
+  if (/tide|level|height/i.test(k)) return "c-tide";
+  if (/hum|dew/i.test(k)) return "c-hum";
+  return "c-other";
+}
+function unitOf(k) { if (/_ms$/.test(k)) return "kn"; return UNITS[k] || (/_c$/.test(k) ? "°C" : ""); }
+function dispVal(k, v) { return (typeof v === "number" && /_ms$/.test(k)) ? v * 1.94384 : v; }
+function findKey(d, re, excl) {
+  return Object.keys(d).find(k => typeof d[k] === "number" && re.test(k) && !(excl && excl.test(k)));
+}
+
+async function get(path) {
+  const r = await fetch(HUB + path);
+  if (!r.ok) throw new Error(r.status + " " + r.statusText);
+  return r.json();
+}
+function showError(e) {
+  errBox.innerHTML = '<div class="err">Could not load data: ' + e.message + '.</div>';
+}
+
+async function loadStations() {
+  const d = await get("/v1/stations");
+  const list = Array.isArray(d) ? d : (d.stations || d.data || []);
+  sel.innerHTML = "";
+  list.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s.slug;
+    o.textContent = s.name || s.title || s.slug;
+    sel.appendChild(o);
+  });
+  const saved = localStorage.getItem("station");
+  let pick = [].slice.call(sel.options).find(o => o.value === saved);
+  if (!pick) pick = [].slice.call(sel.options).find(o =>
+    (o.value + " " + o.textContent).toLowerCase().indexOf(DEFAULT_MATCH) > -1);
+  if (pick) sel.value = pick.value;
+}
+
+function compassSvg(toDeg) {
+  return '<svg viewBox="0 0 120 120" aria-label="Wind direction">' +
+    '<circle cx="60" cy="60" r="56" fill="rgba(255,255,255,.15)" stroke="#fff" stroke-width="2"/>' +
+    '<text x="60" y="17" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">N</text>' +
+    '<text x="105" y="64" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">E</text>' +
+    '<text x="60" y="113" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">S</text>' +
+    '<text x="15" y="64" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">W</text>' +
+    '<g transform="rotate(' + toDeg + ' 60 60)">' +
+    '<polygon points="60,24 72,60 62,56 62,96 58,96 58,56 48,60" fill="#fff"/>' +
+    '</g></svg>';
+}
+
+function renderLatest(d) {
+  const r = d.reading || d;
+  const data = r.data || {};
+  const hero = document.getElementById("hero");
+  const grid = document.getElementById("latest");
+  hero.innerHTML = ""; grid.innerHTML = "";
+  const used = {};
+
+  const kWind = findKey(data, /wind/i, /dir|gust|bearing|deg/i);
+  const kGust = findKey(data, /gust/i, /dir/i);
+  const kDir = findKey(data, /wind.*(dir|deg|bearing)|^(wdir|dir|direction|bearing)/i) ||
+               findKey(data, /dir|bearing/i, /wave|swell|gust/i);
+
+  if (kWind) {
+    used[kWind] = 1;
+    const kn = toKn(kWind, data[kWind]);
+    hero.insertAdjacentHTML("beforeend",
+      '<div class="card" style="background:' + windColour(kn) + '"><div class="k">Wind speed</div>' +
+      '<div class="v">' + r1(kn) + ' <span class="u">kn</span></div>' +
+      '<div class="s">Force ' + beaufort(kn) + '</div></div>');
+  }
+  if (kGust) {
+    used[kGust] = 1;
+    const kn = toKn(kGust, data[kGust]);
+    hero.insertAdjacentHTML("beforeend",
+      '<div class="card" style="background:' + windColour(kn) + '"><div class="k">Gust</div>' +
+      '<div class="v">' + r1(kn) + ' <span class="u">kn</span></div>' +
+      '<div class="s">Force ' + beaufort(kn) + '</div></div>');
+  }
+  if (kDir) {
+    used[kDir] = 1;
+    const deg = data[kDir], toDeg = (deg + 180) % 360;
+    hero.insertAdjacentHTML("beforeend",
+      '<div class="card compass-card">' + compassSvg(toDeg) +
+      '<div><div class="k">Wind from</div><div class="big">' + compass(deg) + '</div>' +
+      '<div class="deg">' + Math.round(deg) + '° bearing</div>' +
+      '<div class="blow">Blowing towards ' + compass(toDeg) + ' (arrow)</div></div></div>');
+  }
+
+  Object.keys(data).forEach(k => {
+    const v = data[k];
+    if (used[k] || v === null || typeof v === "object") return;
+    const u = unitOf(k);
+    grid.insertAdjacentHTML("beforeend",
+      '<div class="tile ' + catClass(k) + '"><div class="k">' + pretty(k) + '</div><div class="v">' + fmt(dispVal(k, v)) +
+      (u ? ' <span class="u">' + u + '</span>' : "") + '</div></div>');
+  });
+
+  document.getElementById("meta").textContent =
+    (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : "") +
+    " · updated " + (r.ts_utc ? fmtTime(r.ts_utc) : "—");
+}
+
+function renderHistory(d) {
+  const rows = d.readings || [];
+  const t = document.getElementById("hist");
+  document.getElementById("hist-title").textContent = rows.length ? (bucket === "hourly" ? "Last 24 hours" : "Last 7 days") : "";
+  if (!rows.length) { t.innerHTML = ""; return; }
+  const first = rows[0].data || {};
+  const keys = Object.keys(first).filter(k => typeof first[k] !== "object");
+  const kDir = findKey(first, /wind.*(dir|deg|bearing)|^(wdir|dir|direction|bearing)/i) ||
+               findKey(first, /dir|bearing/i, /wave|swell|gust/i);
+  t.innerHTML = "<tr><th>Time</th>" + keys.map(k => "<th>" + pretty(k) + (/_ms$/.test(k) ? " (kn)" : "") + "</th>").join("") + "</tr>" +
+    rows.map(r => "<tr><td>" + fmtTime(r.ts_utc) + "</td>" +
+      keys.map(k => {
+        const v = r.data[k];
+        if (v == null) return "<td>—</td>";
+        if (k === kDir && typeof v === "number") return "<td>" + compass(v) + " " + Math.round(v) + "°</td>";
+        return "<td>" + (/_ms$/.test(k) ? r1(dispVal(k, v)) : fmt(v)) + "</td>";
+      }).join("") + "</tr>").join("");
+}
+
+async function loadData() {
+  errBox.innerHTML = "";
+  const slug = sel.value;
+  if (!slug) return;
+  localStorage.setItem("station", slug);
+  document.getElementById("meta").textContent = "Loading…";
+  try {
+    const limit = bucket === "hourly" ? 24 : 7;
+    const res = await Promise.all([
+      get("/v1/stations/" + slug + "/latest"),
+      get("/v1/stations/" + slug + "/readings?limit=" + limit + "&bucket=" + bucket)
+    ]);
+    renderLatest(res[0]);
+    renderHistory(res[1]);
+  } catch (e) { showError(e); }
+}
+
+sel.addEventListener("change", loadData);
+document.getElementById("refresh").addEventListener("click", loadData);
+document.querySelectorAll("button[data-b]").forEach(b => b.addEventListener("click", () => {
+  bucket = b.dataset.b;
+  document.querySelectorAll("button[data-b]").forEach(x => x.classList.toggle("on", x === b));
+  loadData();
+}));
+
+(async () => {
+  try { await loadStations(); await loadData(); } catch (e) { showError(e); document.getElementById("meta").textContent = ""; }
+})();
+</script>
+</body>
+</html>
